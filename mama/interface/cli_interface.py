@@ -8,7 +8,7 @@ from mama.model.litellm_model import LiteLLMModel, LiteLLMConfig
 class CLIInterface(ChatInterface):
     """命令行界面实现"""
 
-    def __init__(self, prompt: str = "你: ", ai_prefix: str = "AI: "):
+    def __init__(self, prompt: str = "👤: ", ai_prefix: str = "🤖: "):
         self.prompt = prompt
         self.ai_prefix = ai_prefix
 
