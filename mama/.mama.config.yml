@@ -1,0 +1,17 @@
+model: null
+api_key: null
+api_base: null
+custom_llm_provider: null
+temperature: 0.2
+top_p: 1.0
+max_tokens: null
+presence_penalty: 0.0
+frequency_penalty: 0.0
+stop: null
+seed: null
+timeout: 60.0
+max_retries: 3
+retry_delay: 1.0
+fallbacks: null
+response_format: null
+extra: {}
