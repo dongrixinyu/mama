@@ -3,6 +3,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# scripts 目录下的配置
+scripts/config.yml
+scripts/config.yaml
+
+# 全局禁止所有 config.yaml / config.yml
+**/config.yaml
+**/config.yml
 
 #
 .idea
