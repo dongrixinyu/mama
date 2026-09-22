@@ -4,20 +4,25 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 
 @dataclass
 class DesktopModelConfig:
-    name: str = "默认模型"
+    name: str = "Default Model"
     url: str = "https://api.openai.com/v1/chat/completions"
     api_key: str = ""
     model: str = ""
     temperature: float = 0.2
     max_tokens: int = 50000
     timeout: float = 800.0
+    # Each named configuration owns its own selectable values. These lists are
+    # deliberately stored on the model entry rather than globally.
+    url_options: list[str] = field(default_factory=list)
+    api_key_options: list[str] = field(default_factory=list)
+    model_options: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DesktopModelConfig":
@@ -42,21 +47,29 @@ class DesktopModelStore:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"无法读取模型配置 {self.path}: {exc}") from exc
+            raise RuntimeError(f"Unable to read model configuration {self.path}: {exc}") from exc
 
         # The documented format is an object. Also accept a bare list so early
         # hand-written configuration files do not break the application.
         if isinstance(data, list):
             active_name, raw_models = "", data
+            saved_options: dict[str, Any] = {}
         elif isinstance(data, dict):
             active_name = str(data.get("active_model", ""))
             raw_models = data.get("models", [])
+            saved_options = data.get("options", {}) if isinstance(data.get("options", {}), dict) else {}
         else:
-            raise RuntimeError("models.json 必须是对象或模型配置数组")
+            raise RuntimeError("models.json must be an object or model configuration array")
         if not isinstance(raw_models, list):
-            raise RuntimeError("models.json 的 models 字段必须是数组")
+            raise RuntimeError("models.json models field must be an array")
 
         models = [DesktopModelConfig.from_dict(item) for item in raw_models if isinstance(item, dict)]
+        # Older files had one global options block. Do not share it between
+        # configurations; each entry starts with its own current value.
+        for item in models:
+            item.url_options = self._merge_options(item.url_options, [item.url])
+            item.api_key_options = self._merge_options(item.api_key_options, [item.api_key], keep_empty=True)
+            item.model_options = self._merge_options(item.model_options, [item.model])
         if not models:
             default = DesktopModelConfig()
             self.save(default.name, [default])
@@ -64,14 +77,32 @@ class DesktopModelStore:
         names = {item.name for item in models}
         return (active_name if active_name in names else models[0].name), models
 
+    @staticmethod
+    def _merge_options(saved: Any, values: Any, keep_empty: bool = False) -> list[str]:
+        result: list[str] = []
+        candidates = list(saved) if isinstance(saved, list) else []
+        candidates.extend(values)
+        for value in candidates:
+            value = str(value).strip()
+            if (value or keep_empty) and value not in result:
+                result.append(value)
+        return result
+
     def save(self, active_name: str, models: list[DesktopModelConfig]) -> None:
         if not models:
-            raise ValueError("至少要保留一个模型配置")
+            raise ValueError("At least one model configuration must be kept")
         names = [model.name.strip() for model in models]
         if any(not name for name in names) or len(set(names)) != len(names):
-            raise ValueError("配置名称不能为空且不能重复")
+            raise ValueError("Configuration names cannot be empty or duplicated")
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        payload = {"version": 1, "active_model": active_name, "models": [asdict(model) for model in models]}
+        for model in models:
+            model.url_options = self._merge_options(model.url_options, [model.url])
+            model.api_key_options = self._merge_options(model.api_key_options, [model.api_key], keep_empty=True)
+            model.model_options = self._merge_options(model.model_options, [model.model])
+        payload = {
+            "version": 2, "active_model": active_name,
+            "models": [asdict(model) for model in models],
+        }
         fd, temporary_path = tempfile.mkstemp(prefix="models-", suffix=".json", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
