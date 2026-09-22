@@ -15,6 +15,11 @@ def main():
     parser = create_arg_parser()
     args = parser.parse_args()
     
+    # Qt GUI 使用独立的模型配置，避免与 CLI 的 LiteLLM YAML 配置混用。
+    if args.gui:
+        from mama.interface.gui_interface import main as gui_main
+        return gui_main()
+
     # 创建CLI界面
     interface = CLIInterface()
 

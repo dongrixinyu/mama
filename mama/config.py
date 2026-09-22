@@ -459,6 +459,12 @@ def create_arg_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="启动 Qt 图形界面（模型/API Key 配置保存在 ~/.mama/models.json）"
+    )
+
+    parser.add_argument(
         "--config",
         type=str,
         help="指定配置文件路径（默认：当前目录下的 .mama.config.yml）"
