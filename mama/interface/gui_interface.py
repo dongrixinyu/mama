@@ -58,6 +58,7 @@ class ChatWindow(QMainWindow):
         self.store = store or DesktopModelStore()
         self.active_name, self.models = self.store.load()
         self.worker: Optional[LLMWorker] = None
+        self._pending_model: Optional[DesktopModelConfig] = None
         self._settings_open = False
         self.setWindowTitle("Mama · AI Copilot")
         icon_dir = Path(__file__).resolve().parents[2] / "image" / "logo"
@@ -248,7 +249,21 @@ class ChatWindow(QMainWindow):
         row = next((i for i, m in enumerate(self.models) if m.name == self.active_name), 0); self.model_list.setCurrentRow(row); self.model_list.blockSignals(False); self.chat_model.setText(f"模型：{self.active_name}")
 
     def _model_selected(self, row: int) -> None:
-        if 0 <= row < len(self.models): self.active_name = self.models[row].name; self._load_form(self.models[row]); self._save_models()
+        if not 0 <= row < len(self.models):
+            return
+        selected = self.models[row]
+        if self._pending_model is not None and selected is not self._pending_model:
+            self.models.remove(self._pending_model)
+            self._pending_model = None
+            self.active_name = selected.name
+            self._reload_model_list()
+            self._load_form(selected)
+            self._save_models()
+            return
+        self.active_name = selected.name
+        self._load_form(selected)
+        if selected is not self._pending_model:
+            self._save_models()
 
     def _load_form(self, model: DesktopModelConfig) -> None:
         if not hasattr(self, "name_field"): return
@@ -283,6 +298,8 @@ class ChatWindow(QMainWindow):
         updated.api_key_options = self._add_option(updated.api_key_options, api_key, keep_empty=True)
         updated.model_options = self._add_option(updated.model_options, model_name)
         self.models[self.models.index(old)] = updated; self.active_name = name
+        if old is self._pending_model:
+            self._pending_model = None
         if self._save_models(): self._reload_model_list()
 
     @staticmethod
@@ -297,13 +314,20 @@ class ChatWindow(QMainWindow):
             temperature=None, max_tokens=None, timeout=None,
         ); names = {m.name for m in self.models}; i = 2
         while base.name in names: base.name = f"New Configuration {i}"; i += 1
-        self.models.append(base); self.active_name = base.name; self._save_models(); self._reload_model_list(); self._load_form(base)
+        self.models.append(base); self.active_name = base.name; self._pending_model = base; self._reload_model_list(); self._load_form(base)
 
     def _delete_model(self) -> None:
         if len(self.models) <= 1: QMessageBox.information(self, "Cannot Delete", "At least one model configuration must remain."); return
         current = self._current_model()
         if QMessageBox.question(self, "Delete Configuration", f"Delete “{current.name}”?") != QMessageBox.StandardButton.Yes: return
-        self.models.remove(current); self.active_name = self.models[0].name; self._save_models(); self._reload_model_list()
+        self.models.remove(current)
+        if current is self._pending_model:
+            self._pending_model = None
+            self.active_name = self.models[0].name
+            self._reload_model_list()
+            self._load_form(self.models[0])
+            return
+        self.active_name = self.models[0].name; self._save_models(); self._reload_model_list()
 
     def start_api_call(self) -> None:
         prompt = self.input_editor.toPlainText().strip(); config = self._current_model()
