@@ -75,7 +75,7 @@ class OpenAICompatibleModel:
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "Accept": "text/event-stream",
         }
         reasoning: list[str] = []
@@ -86,6 +86,7 @@ class OpenAICompatibleModel:
                 self.url, headers=headers, json=payload, stream=True,
                 timeout=self.timeout,
             ) as response:
+                response.encoding = "utf-8"
                 if response.status_code != 200:
                     detail = response.text[:2000]
                     return LLMCallResult(
@@ -120,7 +121,7 @@ class OpenAICompatibleModel:
                         content.append(text)
                         if on_content:
                             on_content(text)
-
+            print(''.join(content))
             result = LLMCallResult(True, "".join(reasoning), "".join(content))
             self._save_response(input_text, result)
             return result

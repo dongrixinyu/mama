@@ -6,6 +6,7 @@ DesktopModelStore.
 """
 from __future__ import annotations
 
+import html
 import sys
 import threading
 from pathlib import Path
@@ -49,6 +50,7 @@ class LLMWorker(QThread):
             on_reasoning=self.reasoning_delta.emit,
             on_content=self.content_delta.emit,
         )
+        print("result: ", result)
         self.completed.emit(result.success, result.error or "Call completed")
 
 
@@ -58,6 +60,8 @@ class ChatWindow(QMainWindow):
         self.store = store or DesktopModelStore()
         self.active_name, self.models = self.store.load()
         self.worker: Optional[LLMWorker] = None
+        self._messages: list[tuple[str, str]] = []
+        self._last_ai_output = ""
         self._pending_model: Optional[DesktopModelConfig] = None
         self._settings_open = False
         self.setWindowTitle("Mama · AI Copilot")
@@ -83,7 +87,8 @@ class ChatWindow(QMainWindow):
             QPushButton#saveButton { background: rgb(132, 175, 35); color: white; border: 0; border-radius: 7px; padding: 10px 18px; font-weight: 600; }
             QPushButton#saveButton:hover { background: rgb(105, 151, 30); }
             QPushButton.secondary { background: white; border: 1px solid #d8dee9; border-radius: 7px; padding: 9px 16px; }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QComboBox { background: white; border: 1px solid #d8dee9; border-radius: 6px; padding: 8px; }
+            QTextEdit, QComboBox { background: white; border: 1px solid #d8dee9; border-radius: 6px; padding: 8px; }
+            #copyButton { background: white; border: 1px solid #d8dee9; border-radius: 7px; padding: 8px 14px; }
             QComboBox QLineEdit { border: 0; padding: 0; background: transparent; }
             QFormLayout QLabel { min-width: 125px; }
             QListWidget { background: white; border: 1px solid #e1e5ec; border-radius: 8px; padding: 5px; }
@@ -108,12 +113,34 @@ class ChatWindow(QMainWindow):
     def _nav(self, text: str) -> QPushButton:
         button = QPushButton(text); button.setProperty("class", "nav"); button.setProperty("active", False); return button
 
+    def _render_conversation(self) -> None:
+        blocks = []
+        for role, text in self._messages:
+            content = html.escape(text).replace("\n", "<br>")
+            if role == "user":
+                blocks.append(
+                    '<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+                    '<td align="right"><table cellspacing="0" cellpadding="0"><tr>'
+                    f'<td style="background-color:rgba(132,175,35,0.10); border-radius:8px; padding:10px;">{content}</td>'
+                    '</tr></table></td></tr></table>'
+                )
+            else:
+                blocks.append(
+                    '<table width="100%" cellspacing="0" cellpadding="0"><tr>'
+                    '<td align="left"><table cellspacing="0" cellpadding="0"><tr>'
+                    f'<td style="background-color:#eeeeee; border-radius:8px; padding:10px;">{content}</td>'
+                    '</tr></table></td></tr></table>'
+                )
+        self.context.setHtml('<br>'.join(blocks))
+        self.context.moveCursor(QTextCursor.MoveOperation.End)
+        self.context.ensureCursorVisible()
+
     def _build_chat_page(self) -> None:
-        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(38, 30, 38, 26); layout.setSpacing(15)
-        head = QHBoxLayout(); title = QLabel("New Chat"); title.setProperty("class", "title"); head.addWidget(title); head.addStretch()
-        self.chat_model = QLabel(); self.chat_model.setProperty("class", "muted"); head.addWidget(self.chat_model); layout.addLayout(head)
-        self.context = QTextEdit(); self.context.setReadOnly(True); self.context.setPlaceholderText("Conversation content will appear here"); layout.addWidget(self.context, 1)
-        prompt_row = QHBoxLayout(); self.input_editor = QTextEdit(); self.input_editor.setPlaceholderText("Type a message to start a new conversation…"); self.input_editor.setFixedHeight(88)
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(38, 30, 38, 26); layout.setSpacing(12)
+        self.context = QTextEdit(); self.context.setReadOnly(True); self.context.setPlaceholderText("Conversation content will appear here"); self.context.setAcceptRichText(True); layout.addWidget(self.context, 1)
+        copy_row = QHBoxLayout(); copy_row.addStretch()
+        self.copy_button = QPushButton("Copy AI Output"); self.copy_button.setObjectName("copyButton"); copy_row.addWidget(self.copy_button); self.copy_button.clicked.connect(self._copy_ai_output); self.copy_button.setEnabled(False); layout.addLayout(copy_row)
+        prompt_row = QHBoxLayout(); self.input_editor = QTextEdit(); self.input_editor.setPlaceholderText("Type a message to start a new conversation…"); self.input_editor.setAcceptRichText(False); self.input_editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus); self.input_editor.setFixedHeight(88)
         prompt_row.addWidget(self.input_editor, 1)
         actions = QVBoxLayout(); self.send_button = QPushButton("Send"); self.send_button.setProperty("class", "primary"); self.send_button.clicked.connect(self.start_api_call); actions.addWidget(self.send_button)
         self.stop_button = QPushButton("Stop"); self.stop_button.setProperty("class", "secondary"); self.stop_button.setEnabled(False); self.stop_button.clicked.connect(self.stop_api_call); actions.addWidget(self.stop_button); actions.addStretch(); prompt_row.addLayout(actions); layout.addLayout(prompt_row)
@@ -246,7 +273,7 @@ class ChatWindow(QMainWindow):
     def _reload_model_list(self) -> None:
         self.model_list.blockSignals(True); self.model_list.clear()
         for model in self.models: self.model_list.addItem(QListWidgetItem(model.name))
-        row = next((i for i, m in enumerate(self.models) if m.name == self.active_name), 0); self.model_list.setCurrentRow(row); self.model_list.blockSignals(False); self.chat_model.setText(f"模型：{self.active_name}")
+        row = next((i for i, m in enumerate(self.models) if m.name == self.active_name), 0); self.model_list.setCurrentRow(row); self.model_list.blockSignals(False)
 
     def _model_selected(self, row: int) -> None:
         if not 0 <= row < len(self.models):
@@ -267,7 +294,7 @@ class ChatWindow(QMainWindow):
 
     def _load_form(self, model: DesktopModelConfig) -> None:
         if not hasattr(self, "name_field"): return
-        self.name_field.setText(model.name); self._set_options(self.url_field, model.url_options, model.url); self._set_options(self.key_field, model.api_key_options, model.api_key, keep_empty=True); self._set_options(self.model_field, model.model_options, model.model); self._set_numeric_value(self.temp_field, model.temperature); self._set_numeric_value(self.tokens_field, model.max_tokens); self._set_numeric_value(self.timeout_field, model.timeout); self.chat_model.setText(f"模型：{model.name}")
+        self.name_field.setText(model.name); self._set_options(self.url_field, model.url_options, model.url); self._set_options(self.key_field, model.api_key_options, model.api_key, keep_empty=True); self._set_options(self.model_field, model.model_options, model.model); self._set_numeric_value(self.temp_field, model.temperature); self._set_numeric_value(self.tokens_field, model.max_tokens); self._set_numeric_value(self.timeout_field, model.timeout)
 
     def _save_models(self) -> bool:
         try: self.store.save(self.active_name, self.models); return True
@@ -333,16 +360,27 @@ class ChatWindow(QMainWindow):
         prompt = self.input_editor.toPlainText().strip(); config = self._current_model()
         if not prompt: QMessageBox.warning(self, "Cannot Send", "Please enter a message."); return
         if not config.api_key: QMessageBox.warning(self, "Cannot Send", "Enter an API Key in Settings → Models first."); return
-        self.context.append(f"You\n{prompt}\n"); self.input_editor.clear(); self.worker = LLMWorker(config, prompt); self.worker.content_delta.connect(self._append_content); self.worker.reasoning_delta.connect(lambda text: None); self.worker.completed.connect(self._call_completed); self.send_button.setEnabled(False); self.stop_button.setEnabled(True); self.worker.start()
+        self._messages.append(("user", prompt))
+        self._messages.append(("assistant", ""))
+        self._render_conversation()
+        self.input_editor.clear(); self.worker = LLMWorker(config, prompt); self.worker.content_delta.connect(self._append_content); self.worker.reasoning_delta.connect(lambda text: None); self.worker.completed.connect(self._call_completed); self.send_button.setEnabled(False); self.stop_button.setEnabled(False); self._last_ai_output = ""; self.worker.start()
 
     def stop_api_call(self) -> None:
         if self.worker and self.worker.isRunning(): self.worker.cancel(); self.stop_button.setEnabled(False)
 
     def _append_content(self, text: str) -> None:
-        self.context.moveCursor(QTextCursor.MoveOperation.End); self.context.insertPlainText(text); self.context.ensureCursorVisible()
+        if not self._messages or self._messages[-1][0] != "assistant":
+            return
+        self._last_ai_output += text
+        self._messages[-1] = ("assistant", self._last_ai_output)
+        self._render_conversation()
+        self.copy_button.setEnabled(bool(self._last_ai_output))
+
+    def _copy_ai_output(self) -> None:
+        QApplication.clipboard().setText(self._last_ai_output)
 
     def _call_completed(self, success: bool, message: str) -> None:
-        self.context.append("\n"); self.worker = None; self.send_button.setEnabled(True); self.stop_button.setEnabled(False)
+        self.worker = None; self.send_button.setEnabled(True); self.stop_button.setEnabled(False)
         if not success and message != "User cancelled the request": QMessageBox.critical(self, "Call Failed", message)
 
 
