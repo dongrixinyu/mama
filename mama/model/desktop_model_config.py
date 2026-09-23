@@ -9,15 +9,23 @@ from pathlib import Path
 from typing import Any
 
 
+TEMPERATURE_MIN = 0.0
+TEMPERATURE_MAX = 1.0
+MAX_TOKENS_MIN = 1
+MAX_TOKENS_MAX = 1_000_000
+TIMEOUT_MIN = 1.0
+TIMEOUT_MAX = 3_600.0
+
+
 @dataclass
 class DesktopModelConfig:
     name: str = "Default Model"
     url: str = "https://api.openai.com/v1/chat/completions"
     api_key: str = ""
     model: str = ""
-    temperature: float = 0.2
-    max_tokens: int = 50000
-    timeout: float = 800.0
+    temperature: float | None = 0.2
+    max_tokens: int | None = 50000
+    timeout: float | None = 800.0
     # Each named configuration owns its own selectable values. These lists are
     # deliberately stored on the model entry rather than globally.
     url_options: list[str] = field(default_factory=list)
@@ -91,6 +99,13 @@ class DesktopModelStore:
     def save(self, active_name: str, models: list[DesktopModelConfig]) -> None:
         if not models:
             raise ValueError("At least one model configuration must be kept")
+        for model in models:
+            if model.temperature is not None and not TEMPERATURE_MIN <= model.temperature <= TEMPERATURE_MAX:
+                raise ValueError(f"Temperature must be between {TEMPERATURE_MIN:g} and {TEMPERATURE_MAX:g}")
+            if model.max_tokens is not None and not MAX_TOKENS_MIN <= model.max_tokens <= MAX_TOKENS_MAX:
+                raise ValueError(f"Max tokens must be between {MAX_TOKENS_MIN:,} and {MAX_TOKENS_MAX:,}")
+            if model.timeout is not None and not TIMEOUT_MIN <= model.timeout <= TIMEOUT_MAX:
+                raise ValueError(f"Timeout must be between {TIMEOUT_MIN:g} and {TIMEOUT_MAX:g} seconds")
         names = [model.name.strip() for model in models]
         if any(not name for name in names) or len(set(names)) != len(names):
             raise ValueError("Configuration names cannot be empty or duplicated")

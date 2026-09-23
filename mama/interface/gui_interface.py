@@ -14,12 +14,15 @@ from typing import Optional
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QIcon, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout,
+    QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QSpinBox, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
+    QPushButton, QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from mama.model.desktop_model_config import DesktopModelConfig, DesktopModelStore
+from mama.model.desktop_model_config import (
+    MAX_TOKENS_MAX, MAX_TOKENS_MIN, TEMPERATURE_MAX, TEMPERATURE_MIN,
+    TIMEOUT_MAX, TIMEOUT_MIN, DesktopModelConfig, DesktopModelStore,
+)
 from mama.model.foreign_llm_model import OpenAICompatibleModel
 
 
@@ -80,6 +83,8 @@ class ChatWindow(QMainWindow):
             QPushButton#saveButton:hover { background: rgb(105, 151, 30); }
             QPushButton.secondary { background: white; border: 1px solid #d8dee9; border-radius: 7px; padding: 9px 16px; }
             QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QComboBox { background: white; border: 1px solid #d8dee9; border-radius: 6px; padding: 8px; }
+            QComboBox QLineEdit { border: 0; padding: 0; background: transparent; }
+            QFormLayout QLabel { min-width: 125px; }
             QListWidget { background: white; border: 1px solid #e1e5ec; border-radius: 8px; padding: 5px; }
             QListWidget::item { padding: 11px 9px; border-radius: 5px; }
             QListWidget::item:selected { background: rgba(132, 175, 35, 0.1); color: #172033; }
@@ -129,9 +134,11 @@ class ChatWindow(QMainWindow):
         self.key_field = self._option_field(self._current_model().api_key_options)
         self.key_field.lineEdit().setEchoMode(QLineEdit.EchoMode.Normal)
         self.model_field = self._option_field(self._current_model().model_options)
-        self.temp_field = QDoubleSpinBox(); self.temp_field.setRange(0, 2); self.temp_field.setSingleStep(.1)
-        self.tokens_field = QSpinBox(); self.tokens_field.setRange(1, 1_000_000)
-        self.timeout_field = QDoubleSpinBox(); self.timeout_field.setRange(1, 3600); self.timeout_field.setSuffix(" sec")
+        self.temp_field = self._numeric_field([i / 10 for i in range(11)])
+        self.tokens_field = self._numeric_field([10_000, 20_000, 30_000, 50_000, 80_000, 100_000, 150_000, 200_000, 500_000, 1_000_000])
+        self.timeout_field = self._numeric_field([(10, "10 sec"), (20, "20 sec"), (30, "30 sec"), (60, "60 sec"), (120, "120 sec"), (300, "5 min"), (600, "10 min")])
+        for field in (self.name_field, self.url_field, self.key_field, self.model_field, self.temp_field, self.tokens_field, self.timeout_field):
+            field.setFixedWidth(460)
         for label, widget in (("Configuration Name", self.name_field), ("URL", self.url_field), ("API Key", self.key_field), ("Model Name", self.model_field), ("Temperature", self.temp_field), ("Max Tokens", self.tokens_field), ("Timeout", self.timeout_field)): form.addRow(label, widget)
         buttons = QHBoxLayout(); save = QPushButton("Save"); save.setObjectName("saveButton"); save.clicked.connect(self._save_form); delete = QPushButton("Delete Configuration"); delete.setProperty("class", "secondary"); delete.clicked.connect(self._delete_model); buttons.addWidget(save); buttons.addWidget(delete); buttons.addStretch(); form.addRow(buttons); body.addWidget(form_box, 1); layout.addLayout(body, 1)
         self.pages.addWidget(page); self._reload_model_list()
@@ -143,9 +150,56 @@ class ChatWindow(QMainWindow):
         return field
 
     @staticmethod
-    def _set_options(field: QComboBox, options: list[str], current: str) -> None:
-        field.blockSignals(True); field.clear(); field.addItems(options)
-        field.setCurrentText(current); field.blockSignals(False)
+    def _numeric_field(values: list[object]) -> QComboBox:
+        field = QComboBox(); field.setEditable(True)
+        field.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        for value in values:
+            if isinstance(value, tuple):
+                numeric, label = value
+            else:
+                numeric, label = value, str(value)
+            field.addItem(label, numeric)
+        return field
+
+    @staticmethod
+    def _set_numeric_value(field: QComboBox, value: float | int | None) -> None:
+        field.blockSignals(True)
+        if value is None:
+            field.setCurrentIndex(-1)
+            field.lineEdit().clear()
+            field.blockSignals(False)
+            return
+        for index in range(field.count()):
+            if float(field.itemData(index)) == float(value):
+                field.setCurrentIndex(index)
+                field.blockSignals(False)
+                return
+        field.setCurrentIndex(-1)
+        field.lineEdit().setText(str(value))
+        field.blockSignals(False)
+
+    @staticmethod
+    def _numeric_value(field: QComboBox, field_name: str) -> float:
+        text = field.currentText().strip().lower().replace(",", "")
+        if text.endswith("min"):
+            return float(text[:-3].strip()) * 60
+        return float(text.replace("seconds", "").replace("sec", "").strip())
+
+
+    @staticmethod
+    def _set_options(field: QComboBox, options: list[str], current: str, keep_empty: bool = False) -> None:
+        values: list[str] = []
+        for value in [*options, current]:
+            value = str(value).strip()
+            if (value or keep_empty) and value not in values:
+                values.append(value)
+        field.blockSignals(True)
+        field.clear()
+        field.addItems(values)
+        field.setCurrentIndex(-1)
+        field.lineEdit().clear()
+        field.lineEdit().setText(current)
+        field.blockSignals(False)
 
     def _show_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index); self.chat_nav.setProperty("active", index == 0); self.models_nav.setProperty("active", index == 1)
@@ -198,7 +252,7 @@ class ChatWindow(QMainWindow):
 
     def _load_form(self, model: DesktopModelConfig) -> None:
         if not hasattr(self, "name_field"): return
-        self.name_field.setText(model.name); self._set_options(self.url_field, model.url_options, model.url); self._set_options(self.key_field, model.api_key_options, model.api_key); self._set_options(self.model_field, model.model_options, model.model); self.temp_field.setValue(model.temperature); self.tokens_field.setValue(model.max_tokens); self.timeout_field.setValue(model.timeout); self.chat_model.setText(f"模型：{model.name}")
+        self.name_field.setText(model.name); self._set_options(self.url_field, model.url_options, model.url); self._set_options(self.key_field, model.api_key_options, model.api_key, keep_empty=True); self._set_options(self.model_field, model.model_options, model.model); self._set_numeric_value(self.temp_field, model.temperature); self._set_numeric_value(self.tokens_field, model.max_tokens); self._set_numeric_value(self.timeout_field, model.timeout); self.chat_model.setText(f"模型：{model.name}")
 
     def _save_models(self) -> bool:
         try: self.store.save(self.active_name, self.models); return True
@@ -209,7 +263,22 @@ class ChatWindow(QMainWindow):
         url = self.url_field.currentText().strip(); api_key = self.key_field.currentText().strip(); model_name = self.model_field.currentText().strip()
         if not name or not url or not model_name: QMessageBox.warning(self, "Incomplete Configuration", "Configuration name, URL, and model name are required."); return
         if any(m is not old and m.name == name for m in self.models): QMessageBox.warning(self, "Save Failed", "Configuration name already exists."); return
-        updated = DesktopModelConfig(name, url, api_key, model_name, self.temp_field.value(), self.tokens_field.value(), self.timeout_field.value(), old.url_options, old.api_key_options, old.model_options)
+        try:
+            temperature = self._numeric_value(self.temp_field, "temperature")
+            max_tokens_value = self._numeric_value(self.tokens_field, "max_tokens")
+            if not max_tokens_value.is_integer():
+                raise ValueError("max tokens must be an integer")
+            max_tokens = int(max_tokens_value)
+            timeout = self._numeric_value(self.timeout_field, "timeout")
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "Invalid Configuration", "Temperature, max tokens, and timeout must be valid numbers."); return
+        if not TEMPERATURE_MIN <= temperature <= TEMPERATURE_MAX:
+            QMessageBox.warning(self, "Invalid Configuration", f"Temperature must be between {TEMPERATURE_MIN:g} and {TEMPERATURE_MAX:g}."); return
+        if not MAX_TOKENS_MIN <= max_tokens <= MAX_TOKENS_MAX:
+            QMessageBox.warning(self, "Invalid Configuration", f"Max tokens must be between {MAX_TOKENS_MIN:,} and {MAX_TOKENS_MAX:,}."); return
+        if not TIMEOUT_MIN <= timeout <= TIMEOUT_MAX:
+            QMessageBox.warning(self, "Invalid Configuration", f"Timeout must be between {TIMEOUT_MIN:g} and {TIMEOUT_MAX:g} seconds."); return
+        updated = DesktopModelConfig(name, url, api_key, model_name, temperature, max_tokens, timeout, old.url_options, old.api_key_options, old.model_options)
         updated.url_options = self._add_option(updated.url_options, url)
         updated.api_key_options = self._add_option(updated.api_key_options, api_key, keep_empty=True)
         updated.model_options = self._add_option(updated.model_options, model_name)
@@ -223,9 +292,12 @@ class ChatWindow(QMainWindow):
         return result
 
     def _add_model(self) -> None:
-        base = DesktopModelConfig(name="New Configuration"); names = {m.name for m in self.models}; i = 2
+        base = DesktopModelConfig(
+            name="New Configuration", url="", api_key="", model="",
+            temperature=None, max_tokens=None, timeout=None,
+        ); names = {m.name for m in self.models}; i = 2
         while base.name in names: base.name = f"New Configuration {i}"; i += 1
-        self.models.append(base); self.active_name = base.name; self._save_models(); self._reload_model_list()
+        self.models.append(base); self.active_name = base.name; self._save_models(); self._reload_model_list(); self._load_form(base)
 
     def _delete_model(self) -> None:
         if len(self.models) <= 1: QMessageBox.information(self, "Cannot Delete", "At least one model configuration must remain."); return
